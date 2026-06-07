@@ -1,69 +1,96 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import SearchPanel from './components/SearchPanel';
 import BookMap from './components/BookMap';
-import { searchBooks, getCountriesByLanguage } from './services/api';
+import { searchBooks, getCountriesByLanguage, resolveOriginalLanguage } from './services/api';
 
 function App() {
   const [query, setQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [selectedBook, setSelectedBook] = useState(null);
+
+  // The resolved original language of the selected book
+  const [originalLanguage, setOriginalLanguage] = useState(null);
+  // The language currently being visualised on the map (original or a translation)
   const [selectedLanguage, setSelectedLanguage] = useState(null);
+
   const [countries, setCountries] = useState([]);
 
   const [loadingBooks, setLoadingBooks] = useState(false);
+  // True while the edition API call that resolves the original language is in flight
+  const [resolvingLanguage, setResolvingLanguage] = useState(false);
   const [loadingCountries, setLoadingCountries] = useState(false);
 
   const [searchError, setSearchError] = useState(null);
   const [mapError, setMapError] = useState(null);
 
-  // Trigger search from input query
+  // ── Search ──────────────────────────────────────────────────────────────────
+
   const handleSearch = async () => {
-    if (!query || !query.trim()) return;
+    if (!query.trim()) return;
 
     setLoadingBooks(true);
     setSearchError(null);
-    setSelectedBook(null);
-    setSelectedLanguage(null);
-    setCountries([]);
-    setMapError(null);
+    resetBookState();
 
     try {
       const books = await searchBooks(query);
       setSearchResults(books);
     } catch (err) {
-      setSearchError(err.message || 'Unable to connect to Open Library API. Please check your network connection.');
+      setSearchError(
+        err.message || 'Unable to connect to Open Library API. Check your network connection.'
+      );
       setSearchResults([]);
     } finally {
       setLoadingBooks(false);
     }
   };
 
-  // Select a book from the list
-  const handleBookSelect = (book) => {
+  // ── Book selection ───────────────────────────────────────────────────────────
+
+  const handleBookSelect = async (book) => {
     setSelectedBook(book);
     setMapError(null);
     setCountries([]);
+    setOriginalLanguage(null);
+    setSelectedLanguage(null);
 
-    if (book.primaryLanguage) {
-      setSelectedLanguage(book.primaryLanguage);
-      fetchCountryData(book.primaryLanguage);
-    } else {
-      setSelectedLanguage(null);
+    if (book.languages.length === 0) return;
+
+    // Resolve the original language in the background while the details pane opens
+    setResolvingLanguage(true);
+    try {
+      const resolved = await resolveOriginalLanguage(
+        book.coverEditionKey,
+        book.title,
+        book.languages
+      );
+      setOriginalLanguage(resolved);
+      setSelectedLanguage(resolved);
+      if (resolved) fetchCountryData(resolved);
+    } catch (err) {
+      console.error('Language resolution failed, using first available:', err);
+      const fallback = book.languages[0];
+      setOriginalLanguage(fallback);
+      setSelectedLanguage(fallback);
+      if (fallback) fetchCountryData(fallback);
+    } finally {
+      setResolvingLanguage(false);
     }
   };
 
-  // Change language dynamically (for books with multiple languages)
+  // ── Language switching (original ↔ translation) ───────────────────────────
+
   const handleLanguageSelect = (langCode) => {
     setSelectedLanguage(langCode);
     setMapError(null);
     fetchCountryData(langCode);
   };
 
-  // Query country data based on language code
+  // ── Country data fetch ────────────────────────────────────────────────────
+
   const fetchCountryData = async (langCode) => {
     setLoadingCountries(true);
     setMapError(null);
-
     try {
       const countryList = await getCountriesByLanguage(langCode);
       setCountries(countryList);
@@ -75,33 +102,39 @@ function App() {
     }
   };
 
-  // Clear search field and all states
+  // ── Clear / back ─────────────────────────────────────────────────────────
+
+  const resetBookState = () => {
+    setSelectedBook(null);
+    setOriginalLanguage(null);
+    setSelectedLanguage(null);
+    setCountries([]);
+    setMapError(null);
+    setResolvingLanguage(false);
+  };
+
   const handleClearSearch = () => {
     setQuery('');
     setSearchResults([]);
-    setSelectedBook(null);
-    setSelectedLanguage(null);
-    setCountries([]);
     setSearchError(null);
-    setMapError(null);
+    resetBookState();
   };
 
-  // Return to the search list from details view
   const handleBackToSearch = () => {
-    setSelectedBook(null);
-    setSelectedLanguage(null);
-    setCountries([]);
-    setMapError(null);
+    resetBookState();
   };
+
+  // ── Render ───────────────────────────────────────────────────────────────
 
   return (
     <main className="app-container">
-      {/* Sidebar Panel containing Search & Book Details */}
       <SearchPanel
         query={query}
         setQuery={setQuery}
         searchResults={searchResults}
         selectedBook={selectedBook}
+        originalLanguage={originalLanguage}
+        resolvingLanguage={resolvingLanguage}
         selectedLanguage={selectedLanguage}
         loading={loadingBooks}
         error={searchError}
@@ -112,7 +145,6 @@ function App() {
         onBackToSearch={handleBackToSearch}
       />
 
-      {/* Interactive Map Visualizer */}
       <BookMap
         countries={countries}
         language={selectedLanguage}

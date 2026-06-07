@@ -101,6 +101,38 @@ const LANGUAGE_NAMES = {
   'ang': 'Old English'
 };
 
+// Override dictionary for famous works to guarantee their canonical original language
+const FAMOUS_BOOKS_ORIGINAL_LANGUAGES = {
+  'hobbit': 'eng',
+  'lord of the rings': 'eng',
+  'quixote': 'spa',
+  'quijote': 'spa',
+  'petit prince': 'fre',
+  'little prince': 'fre',
+  'odyssey': 'gre',
+  'iliad': 'gre',
+  'divina commedia': 'ita',
+  'divine comedy': 'ita',
+  'miserables': 'fre',
+  'faust': 'ger',
+  'trial': 'ger',
+  'metamorphosis': 'ger',
+  'war and peace': 'rus',
+  'crime and punishment': 'rus',
+  'karamazov': 'rus',
+  'one hundred years of solitude': 'spa',
+  'cien anos de soledad': 'spa',
+  'pride and prejudice': 'eng',
+  'hamlet': 'eng',
+  'romeo': 'eng',
+  'gatsby': 'eng',
+  'ulysses': 'eng',
+  'hundred years of solitude': 'spa',
+  'moby dick': 'eng',
+  'dracula': 'eng',
+  'sherlock': 'eng'
+};
+
 /**
  * Translate a language code to friendly display name
  * @param {string} code 3-letter language code
@@ -143,10 +175,105 @@ export const searchBooks = async (title) => {
       year: doc.first_publish_year || 'N/A',
       languages: doc.language || [],
       primaryLanguage: firstLanguage,
+      coverEditionKey: doc.cover_edition_key || null,
       coverUrl: doc.cover_i ? `https://covers.openlibrary.org/b/id/${doc.cover_i}-M.jpg` : null,
       coverUrlLarge: doc.cover_i ? `https://covers.openlibrary.org/b/id/${doc.cover_i}-L.jpg` : null,
     };
   });
+};
+
+/**
+ * Resolves the original language of a book using overrides, edition API queries, or heuristics
+ * @param {string} coverEditionKey Cover edition ID (e.g. OL51711263M)
+ * @param {string} title Book title
+ * @param {Array<string>} languages Mapped list of language codes
+ * @returns {Promise<string>} The resolved original language code
+ */
+export const resolveOriginalLanguage = async (coverEditionKey, title, languages = []) => {
+  if (languages.length === 0) return null;
+  if (languages.length === 1) return languages[0];
+
+  const lowerTitle = title.toLowerCase().trim();
+
+  // Tier 1: Check manual overrides for famous books
+  for (const [key, lang] of Object.entries(FAMOUS_BOOKS_ORIGINAL_LANGUAGES)) {
+    if (lowerTitle.includes(key)) {
+      // Confirm the mapped code is in the book languages, otherwise continue
+      const matched = languages.find(l => l.toLowerCase() === lang);
+      if (matched) return matched;
+      
+      // Handle bibliographic code mapping differences (e.g. fre vs fra)
+      const alternateLang = Object.keys(LANGUAGE_CODE_MAP).find(
+        key => LANGUAGE_CODE_MAP[key] === lang || key === lang
+      );
+      const matchedAlt = alternateLang && languages.find(l => l.toLowerCase() === alternateLang);
+      if (matchedAlt) return matchedAlt;
+    }
+  }
+
+  // Tier 2: Check Cover Edition Details (if coverEditionKey is present)
+  if (coverEditionKey) {
+    try {
+      const response = await fetch(`https://openlibrary.org/books/${coverEditionKey}.json`);
+      if (response.ok) {
+        const edition = await response.json();
+        
+        // If the edition is a translation, look at what it was translated from
+        if (edition.translated_from && edition.translated_from.length > 0) {
+          const transLangKey = edition.translated_from[0].key; // e.g. "/languages/eng"
+          const code = transLangKey.split('/').pop()?.toLowerCase();
+          if (code && languages.some(l => l.toLowerCase() === code)) {
+            return languages.find(l => l.toLowerCase() === code);
+          }
+        }
+        
+        // Otherwise, use the language of this edition
+        if (edition.languages && edition.languages.length > 0) {
+          const langKey = edition.languages[0].key; // e.g. "/languages/eng"
+          const code = langKey.split('/').pop()?.toLowerCase();
+          if (code && languages.some(l => l.toLowerCase() === code)) {
+            return languages.find(l => l.toLowerCase() === code);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to retrieve cover edition details for language resolution, falling back:', err);
+    }
+  }
+
+  // Tier 3: Apply structural title keyword heuristics to guess
+  const titleWords = lowerTitle.split(/\s+/);
+  
+  // English heuristic
+  const engWords = ['the', 'of', 'and', 'in', 'to', 'for', 'with', 'on', 'by', 'at'];
+  if (languages.some(l => l.toLowerCase() === 'eng') && titleWords.some(w => engWords.includes(w))) {
+    return 'eng';
+  }
+
+  // Spanish heuristic
+  const spaWords = ['el', 'la', 'los', 'las', 'un', 'una', 'de', 'en', 'y', 'con', 'por', 'para'];
+  if (languages.some(l => l.toLowerCase() === 'spa') && titleWords.some(w => spaWords.includes(w))) {
+    return 'spa';
+  }
+
+  // French heuristic
+  const freWords = ['le', 'la', 'les', 'un', 'une', 'de', 'en', 'et', 'dans', 'sur', 'pour', 'avec'];
+  const freCodes = ['fre', 'fra'];
+  const availableFre = languages.find(l => freCodes.includes(l.toLowerCase()));
+  if (availableFre && titleWords.some(w => freWords.includes(w))) {
+    return availableFre;
+  }
+
+  // German heuristic
+  const gerWords = ['der', 'die', 'das', 'ein', 'eine', 'und', 'in', 'mit', 'von', 'zu', 'auf'];
+  const gerCodes = ['ger', 'deu'];
+  const availableGer = languages.find(l => gerCodes.includes(l.toLowerCase()));
+  if (availableGer && titleWords.some(w => gerWords.includes(w))) {
+    return availableGer;
+  }
+
+  // Default: Fall back to the first available language code
+  return languages[0];
 };
 
 /**
