@@ -1,8 +1,3 @@
-> **Translations / Traduções:**
-> 🇺🇸 [English](README.md) | 🇧🇷 [Português](https://www.google.com/search?q=README.pt.md)
-
----
-
 # Atlas of Books - Explorador de Mapas de Idiomas
 
 Uma aplicação web interativa desenvolvida em React + Vite que permite aos usuários pesquisar livros e visualizar, em um mapa-múndi dinâmico, os países soberanos associados aos idiomas da obra selecionada.
